@@ -1,0 +1,26 @@
+[package]
+name = "pikvm-hid-stm32"
+description = "A firmware for an alternative HID adapter for PiKVM, using an stm32 microcontroller"
+version = "0.1.0"
+authors = ["Jan Niehusmann <jan@gondor.com>"]
+license = "MIT OR Apache-2.0"
+edition = "2018"
+
+[dependencies]
+cortex-m = "0.6"
+cortex-m-rt = "0.6"
+stm32f1xx-hal = { version = "0.6", features = ["stm32f103", "stm32-usbd", "rt"] }
+panic-semihosting = "0.5"
+usb-device = "0.2.4"
+embedded-hal = "0.2.3"
+cortex-m-rtic = "0.5"
+nb = "0.1.2"
+cortex-m-semihosting = "0.3.5"
+usbd-hid-device = "0.1.1"
+
+[profile.release]
+debug = true
+
+[features]
+# use wfi for idle
+wfi = []
