@@ -16,8 +16,11 @@ use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 use stm32f1xx_hal::{gpio, prelude::*, serial, serial::Event as SerialEvent, serial::Serial};
 use usb_device::bus;
 use usb_device::prelude::*;
+use core::convert::TryInto;
 
 use usbd_hid_device::Hid;
+
+use keycode::{KeyboardState, KeyMap, KeyMapping, KeyMappingId, KeyState};
 
 mod buf;
 mod report;
@@ -27,12 +30,40 @@ use report::KeyboardReport;
 
 type LED = gpio::gpioc::PC13<gpio::Output<gpio::PushPull>>;
 
+struct SerialKeyCode(u8);
+
+impl Into<KeyMapping> for SerialKeyCode {
+    fn into(self) -> KeyMapping {
+        match self.0 {
+            1..=46 => KeyMapping::Usb(self.0 as u16 + 3),
+            47..=66 => KeyMapping::Usb(self.0 as u16 + 4),
+            67..=76 => KeyMapping::Usb(self.0 as u16 + 6),
+            77 => KeyMapping::Id(KeyMappingId::ControlLeft),
+            78 => KeyMapping::Id(KeyMappingId::ShiftLeft),
+            79 => KeyMapping::Id(KeyMappingId::AltLeft),
+            80 => KeyMapping::Id(KeyMappingId::MetaLeft),
+            81 => KeyMapping::Id(KeyMappingId::ControlRight),
+            82 => KeyMapping::Id(KeyMappingId::ShiftRight),
+            83 => KeyMapping::Id(KeyMappingId::AltRight),
+            84 => KeyMapping::Id(KeyMappingId::MetaRight),
+            85 => KeyMapping::Id(KeyMappingId::Pause),
+            86 => KeyMapping::Id(KeyMappingId::ScrollLock),
+            87 => KeyMapping::Id(KeyMappingId::NumLock),
+            88 => KeyMapping::Id(KeyMappingId::ContextMenu),
+            89..=104 => KeyMapping::Usb(self.0 as u16 - 5),
+            105 => KeyMapping::Id(KeyMappingId::Power),
+            _ => KeyMapping::Code(None), // TODO: Better handling of unknown codes
+        }
+    }
+}
+
 #[rtic::app(device = stm32f1xx_hal::stm32, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
         prev_response: ProtoResponse,
         led: LED,
         serial_buffer: Buffer,
+        keyboard_state: KeyboardState,
 
         usb_dev: UsbDevice<'static, UsbBusType>,
         hid: Hid<'static, KeyboardReport, UsbBusType>,
@@ -109,10 +140,16 @@ const APP: () = {
 
         let serial_buffer = Buffer::new();
 
+        // Set key rollover to 6 keys. This fixes the hid
+        // report length to 8 bytes, as currently expected by
+        // report::KeyboardReport.
+        let keyboard_state = KeyboardState::new(Some(6));
+
         init::LateResources {
             prev_response: ProtoResponse::None,
             led,
             serial_buffer,
+            keyboard_state,
 
             usb_dev,
             hid,
@@ -122,11 +159,12 @@ const APP: () = {
         }
     }
 
-    #[task(spawn = [toggle], resources = [tx, prev_response, hid])]
+    #[task(spawn = [toggle], resources = [tx, prev_response, hid, keyboard_state])]
     fn handle_cmd(cx: handle_cmd::Context, cmd: [u8; 8]) {
         let tx = cx.resources.tx;
         let prev = cx.resources.prev_response;
         let mut hid = cx.resources.hid;
+        let keyboard_state = cx.resources.keyboard_state;
         let crc: u16 = ((cmd[6] as u16) << 8) | (cmd[7] as u16);
         if calculate_crc(&cmd[0..6]) == crc {
             const PROTO_CMD_PING: u8 = 0x01;
@@ -145,14 +183,18 @@ const APP: () = {
                 }
                 PROTO_CMD_KEY_EVENT => {
                     *prev = ProtoResponse::Ok;
-                    let resp = if cmd[3] != 0 {
-                        let key = cmd[2] + 3; // TODO: proper mapping
-                        let report = KeyboardReport::new(key);
+                    let key_mapping: KeyMapping = SerialKeyCode(cmd[2]).into();
+                    let key: Result<KeyMap, ()> = KeyMap::from_key_mapping(key_mapping);
+                    let resp = key.map(|key| {
+                        if cmd[3] != 0 {
+                            keyboard_state.update_key(key, KeyState::Pressed);
+                        } else  {
+                            keyboard_state.update_key(key, KeyState::Released);
+                        }
+                        let report = KeyboardReport::new(keyboard_state.usb_input_report().try_into().expect("report should be 8 bytes long"));
                         hid.lock(|hid| hid.send_report(&report))
-                    } else {
-                        let report = KeyboardReport::new(0);
-                        hid.lock(|hid| hid.send_report(&report))
-                    };
+                    });
+
                     if resp.is_ok() {
                         send_cmd_response(tx, ProtoResponse::Ok);
                     } else {

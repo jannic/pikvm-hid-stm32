@@ -16,9 +16,9 @@ pub struct KeyboardReport {
 }
 
 impl KeyboardReport {
-    pub fn new(key: u8) -> Self {
+    pub fn new(keys: [u8;8 ]) -> Self {
         KeyboardReport {
-            bytes: [0, 0, key, 0, 0, 0, 0, 0],
+            bytes: keys
         }
     }
 }
