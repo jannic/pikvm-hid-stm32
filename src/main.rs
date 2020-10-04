@@ -45,6 +45,7 @@ impl Into<KeyMapping> for SerialKeyCode {
             88 => KeyMapping::Id(KeyMappingId::ContextMenu),
             89..=104 => KeyMapping::Usb(self.0 as u16 - 5),
             105 => KeyMapping::Id(KeyMappingId::Power),
+            106 => KeyMapping::Id(KeyMappingId::IntlBackslash),
             _ => KeyMapping::Code(None), // TODO: Better handling of unknown codes
         }
     }
