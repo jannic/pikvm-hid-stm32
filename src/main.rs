@@ -27,6 +27,7 @@ mod report;
 
 use buf::Buffer;
 use report::KeyboardReport;
+use report::MouseReport;
 
 type LED = gpio::gpioc::PC13<gpio::Output<gpio::PushPull>>;
 
@@ -51,6 +52,13 @@ impl Into<KeyMapping> for SerialKeyCode {
     }
 }
 
+const PROTO_CMD_MOUSE_BUTTON_LEFT_SELECT: u8 = 0b10000000;
+const PROTO_CMD_MOUSE_BUTTON_LEFT_STATE: u8 = 0b00001000;
+const PROTO_CMD_MOUSE_BUTTON_RIGHT_SELECT: u8 = 0b01000000;
+const PROTO_CMD_MOUSE_BUTTON_RIGHT_STATE: u8 = 0b00000100;
+const PROTO_CMD_MOUSE_BUTTON_MIDDLE_SELECT: u8 = 0b00100000;
+const PROTO_CMD_MOUSE_BUTTON_MIDDLE_STATE: u8 = 0b00000010;
+
 #[rtic::app(device = stm32f1xx_hal::stm32, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
@@ -58,9 +66,11 @@ const APP: () = {
         led: LED,
         serial_buffer: Buffer,
         keyboard_state: KeyboardState,
+        mouse_state: MouseState,
 
         usb_dev: UsbDevice<'static, UsbBusType>,
-        hid: Hid<'static, KeyboardReport, UsbBusType>,
+        keyboard_hid: Hid<'static, KeyboardReport, UsbBusType>,
+        mouse_hid: Hid<'static, MouseReport, UsbBusType>,
         tx: serial::Tx<USART1>,
         rx: serial::Rx<USART1>,
     }
@@ -107,7 +117,8 @@ const APP: () = {
 
         *USB_BUS = Some(UsbBus::new(usb));
 
-        let hid = Hid::new(USB_BUS.as_ref().unwrap(), 10);
+        let keyboard_hid = Hid::new(USB_BUS.as_ref().unwrap(), 10);
+        let mouse_hid = Hid::new(USB_BUS.as_ref().unwrap(), 10);
 
         let usb_dev = UsbDeviceBuilder::new(USB_BUS.as_ref().unwrap(), UsbVidPid(0xc410, 0x0000))
             .manufacturer("Jan")
@@ -139,26 +150,32 @@ const APP: () = {
         // report::KeyboardReport.
         let keyboard_state = KeyboardState::new(Some(6));
 
+        let mouse_state = MouseState::new();
+
         init::LateResources {
             prev_response: ProtoResponse::None,
             led,
             serial_buffer,
             keyboard_state,
+            mouse_state,
 
             usb_dev,
-            hid,
+            keyboard_hid,
+            mouse_hid,
 
             tx,
             rx,
         }
     }
 
-    #[task(spawn = [toggle], resources = [tx, prev_response, hid, keyboard_state])]
+    #[task(spawn = [toggle], resources = [tx, prev_response, keyboard_hid, mouse_hid, keyboard_state, mouse_state])]
     fn handle_cmd(cx: handle_cmd::Context, cmd: [u8; 8]) {
         let tx = cx.resources.tx;
         let prev = cx.resources.prev_response;
-        let mut hid = cx.resources.hid;
+        let mut keyboard_hid = cx.resources.keyboard_hid;
+        let mut mouse_hid = cx.resources.mouse_hid;
         let keyboard_state = cx.resources.keyboard_state;
+        let mouse_state = cx.resources.mouse_state;
         let crc: u16 = ((cmd[6] as u16) << 8) | (cmd[7] as u16);
         if calculate_crc(&cmd[0..6]) == crc {
             const PROTO_CMD_PING: u8 = 0x01;
@@ -186,7 +203,7 @@ const APP: () = {
                             keyboard_state.update_key(key, KeyState::Released);
                         }
                         let report = KeyboardReport::new(keyboard_state.usb_input_report().try_into().expect("report should be 8 bytes long"));
-                        hid.lock(|hid| hid.send_report(&report))
+                        keyboard_hid.lock(|hid| hid.send_report(&report))
                     });
 
                     if resp.is_ok() {
@@ -196,10 +213,61 @@ const APP: () = {
                     }
                     cx.spawn.toggle().ok();
                 }
-                PROTO_CMD_MOUSE_MOVE_EVENT | PROTO_CMD_MOUSE_BUTTON_EVENT => {
+                PROTO_CMD_MOUSE_MOVE_EVENT => {
                     *prev = ProtoResponse::Ok;
-                    send_cmd_response(tx, ProtoResponse::InvalidError);
-                    cx.spawn.toggle().ok();
+                    let x = ((i16::from_be_bytes(cmd[2..=3].try_into().unwrap()) / 2) as u16).wrapping_add(0x4000);
+                    let y = ((i16::from_be_bytes(cmd[4..=5].try_into().unwrap()) / 2) as u16).wrapping_add(0x4000);
+                    mouse_state.x = x;
+                    mouse_state.y = y;
+
+                    /*
+                    let resp = key.map(|key| {
+                        if cmd[3] != 0 {
+                            keyboard_state.update_key(key, KeyState::Pressed);
+                        } else  {
+                            keyboard_state.update_key(key, KeyState::Released);
+                        }
+                        let report = KeyboardReport::new(keyboard_state.usb_input_report().try_into().expect("report should be 8 bytes long"));
+                        keyboard_hid.lock(|hid| hid.send_report(&report))
+                    });
+                    */
+                    let resp = mouse_hid.lock(|hid| hid.send_report(&mouse_state.report()));
+                    if resp.is_ok() {
+                        send_cmd_response(tx, ProtoResponse::Ok);
+                    } else {
+                        send_cmd_response(tx, ProtoResponse::InvalidError);
+                    }
+                }
+                PROTO_CMD_MOUSE_BUTTON_EVENT => {
+                    *prev = ProtoResponse::Ok;
+                    let state = cmd[2];
+                    if state & PROTO_CMD_MOUSE_BUTTON_LEFT_SELECT != 0 {
+                        if state & PROTO_CMD_MOUSE_BUTTON_LEFT_STATE != 0 {
+                            mouse_state.buttons |= 1<<0;
+                        } else {
+                            mouse_state.buttons &= !(1<<0);
+                        }
+                    }
+                    if state & PROTO_CMD_MOUSE_BUTTON_RIGHT_SELECT != 0 {
+                        if state & PROTO_CMD_MOUSE_BUTTON_RIGHT_STATE != 0 {
+                            mouse_state.buttons |= 1<<1;
+                        } else {
+                            mouse_state.buttons &= !(1<<1);
+                        }
+                    }
+                    if state & PROTO_CMD_MOUSE_BUTTON_MIDDLE_SELECT != 0 {
+                        if state & PROTO_CMD_MOUSE_BUTTON_MIDDLE_STATE != 0 {
+                            mouse_state.buttons |= 1<<2;
+                        } else {
+                            mouse_state.buttons &= !(1<<2);
+                        }
+                    }
+                    let resp = mouse_hid.lock(|hid| hid.send_report(&mouse_state.report()));
+                    if resp.is_ok() {
+                        send_cmd_response(tx, ProtoResponse::Ok);
+                    } else {
+                        send_cmd_response(tx, ProtoResponse::InvalidError);
+                    }
                 }
                 _ => send_cmd_response(tx, ProtoResponse::InvalidError),
             }
@@ -215,14 +283,14 @@ const APP: () = {
         led.toggle().ok(); // ignoring errors
     }
 
-    #[task(binds=USB_HP_CAN_TX, resources = [usb_dev, hid], priority=3)]
+    #[task(binds=USB_HP_CAN_TX, resources = [usb_dev, keyboard_hid, mouse_hid], priority=3)]
     fn usb_tx(cx: usb_tx::Context) {
-        usb_poll(cx.resources.usb_dev, cx.resources.hid);
+        usb_poll(cx.resources.usb_dev, cx.resources.keyboard_hid, cx.resources.mouse_hid);
     }
 
-    #[task(binds=USB_LP_CAN_RX0, resources = [usb_dev, hid], priority=3)]
+    #[task(binds=USB_LP_CAN_RX0, resources = [usb_dev, keyboard_hid, mouse_hid], priority=3)]
     fn usb_rx(cx: usb_rx::Context) {
-        usb_poll(cx.resources.usb_dev, cx.resources.hid);
+        usb_poll(cx.resources.usb_dev, cx.resources.keyboard_hid, cx.resources.mouse_hid);
     }
 
     // UART interrupt, read from the RX buffer and write to hid
@@ -285,9 +353,10 @@ fn calculate_crc(bytes: &[u8]) -> u16 {
 
 fn usb_poll<B: bus::UsbBus>(
     usb_dev: &mut UsbDevice<'static, B>,
-    hid: &mut Hid<'static, KeyboardReport, B>,
+    keyboard_hid: &mut Hid<'static, KeyboardReport, B>,
+    mouse_hid: &mut Hid<'static, MouseReport, B>,
 ) {
-    usb_dev.poll(&mut [hid]);
+    usb_dev.poll(&mut [keyboard_hid, mouse_hid]);
 }
 
 #[derive(Clone)]
@@ -354,4 +423,19 @@ fn pi_kvm_crc(bytes: &[u8]) -> u16 {
         }
     }
     crc
+}
+
+pub struct MouseState {
+    pub x: u16,
+    pub y: u16,
+    pub buttons: u16,
+}
+
+impl MouseState {
+    fn new() -> Self {
+        Self { x: 0, y: 0, buttons: 0 }
+    }
+    fn report(&self) -> MouseReport {
+        MouseReport::new((self.buttons & 0xff) as u8, self.x, self.y)
+    }
 }
