@@ -24,8 +24,7 @@ use usbd_hid_device::Hid;
 
 use keycode::KeyboardState;
 
-mod buf;
-use buf::Buffer;
+use arraydeque::ArrayDeque;
 
 mod report;
 use report::KeyboardReport;
@@ -59,7 +58,7 @@ const APP: () = {
     struct Resources {
         proto_state: proto::ProtoState,
         led: LED,
-        serial_buffer: Buffer,
+        serial_buffer: ArrayDeque<[u8; 16]>,
         keyboard_state: KeyboardState,
         mouse_state: MouseState,
 
@@ -138,7 +137,7 @@ const APP: () = {
         // Split TX and RX
         let (tx, rx) = serial.split();
 
-        let serial_buffer = Buffer::new();
+        let serial_buffer = ArrayDeque::new();
 
         // Set key rollover to 6 keys. This fixes the hid
         // report length to 8 bytes, as currently expected by
@@ -224,17 +223,17 @@ const APP: () = {
     #[task(binds = USART1, resources = [rx, serial_buffer], priority = 3, spawn = [handle_cmd, toggle])]
     fn usart1(cx: usart1::Context) {
         let buf = cx.resources.serial_buffer;
-        if !buf.has_capacity() {
+        if buf.is_full() {
             buf.clear(); // should not happen, as buffer is cleared below, as soon as it contains 8 bytes
         }
         match cx.resources.rx.read() {
-            Ok(byte) if buf.len() == 0 && byte != 0x33 => { /* ignore */ }
+            Ok(byte) if buf.is_empty() && byte != 0x33 => { /* ignore */ }
             Ok(byte) => {
-                buf.put(byte).unwrap(); // checked capacity above
+                buf.push_back(byte).unwrap(); // checked capacity above
                 if buf.len() >= 8 {
                     let mut cmd = [0u8; 8];
                     for b in cmd.iter_mut() {
-                        *b = buf.get().unwrap();
+                        *b = buf.pop_front().unwrap();
                     }
                     cx.spawn.handle_cmd(cmd).ok();
                 }

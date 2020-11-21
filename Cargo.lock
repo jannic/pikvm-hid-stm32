@@ -304,6 +304,7 @@ dependencies = [
 name = "pikvm-hid-stm32"
 version = "0.1.0"
 dependencies = [
+ "arraydeque",
  "cortex-m",
  "cortex-m-rt",
  "cortex-m-rtic",
