@@ -16,10 +16,8 @@ pub struct KeyboardReport {
 }
 
 impl KeyboardReport {
-    pub fn new(keys: [u8;8 ]) -> Self {
-        KeyboardReport {
-            bytes: keys
-        }
+    pub fn new(keys: [u8; 8]) -> Self {
+        KeyboardReport { bytes: keys }
     }
 }
 
@@ -42,7 +40,6 @@ impl HidReport for KeyboardReport {
     ];
 }
 
-
 /// Hid report for a 3-button mouse.
 pub struct MouseReport {
     // byte 0: buttons
@@ -54,7 +51,15 @@ pub struct MouseReport {
 impl MouseReport {
     pub fn new(buttons: u8, x: u16, y: u16) -> Self {
         MouseReport {
-            bytes: [buttons, x as u8, (x >> 8) as u8, y as u8, (y >> 8) as u8,  0, 0]
+            bytes: [
+                buttons,
+                x as u8,
+                (x >> 8) as u8,
+                y as u8,
+                (y >> 8) as u8,
+                0,
+                0,
+            ],
         }
     }
 }
@@ -65,6 +70,7 @@ impl AsRef<[u8]> for MouseReport {
     }
 }
 
+#[rustfmt::skip]
 impl HidReport for MouseReport {
     const DESCRIPTOR: &'static [u8] = &[
         0x05, 0x01,     // USAGE_PAGE Generic Desktop
@@ -99,4 +105,3 @@ impl HidReport for MouseReport {
         0xc0,           // END COLLECTION
     ];
 }
-

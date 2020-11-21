@@ -17,10 +17,18 @@ cortex-m-rtic = "0.5"
 nb = "0.1.2"
 cortex-m-semihosting = "0.3.5"
 usbd-hid-device = "0.1.1"
+# According to cargo bloat, this adds about 20kB (44%) to the
+# code size. In the firmware becomes too large, this would be
+# a candidate for a replacement.
+# An easier approach to significantly reduce the firmware
+# size is enabling lto below.
 keycode = "0.3.0"
 
 [profile.release]
 debug = true
+# opt-level = "z"
+# lto = true
+# codegen-units = 1
 
 [features]
 # use wfi for idle
