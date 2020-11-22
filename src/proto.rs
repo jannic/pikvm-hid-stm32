@@ -1,10 +1,10 @@
 use super::MouseState;
 use core::convert::TryInto;
 
-use cortex_m::asm::delay;
 use embedded_hal::serial::Write;
 use keycode::{KeyMap, KeyMapping, KeyMappingId, KeyState, KeyboardState};
 use usb_device::UsbError;
+use nb::block;
 
 pub const CMD_PING: u8 = 0x01;
 pub const CMD_REPEAT: u8 = 0x02;
@@ -166,9 +166,7 @@ fn send_cmd_response<TX: Write<u8>>(tx: &mut TX, resp: ProtoResponse) {
             buf[2] = (crc >> 8) as u8;
             buf[3] = (crc & 0xff) as u8;
             for &b in buf.iter() {
-                tx.write(b).ok();
-                // TODO hack
-                delay(48_000_000 / 10000);
+                block!(tx.write(b)).ok();
             }
         }
         ProtoResponse::Ok => {
@@ -177,9 +175,7 @@ fn send_cmd_response<TX: Write<u8>>(tx: &mut TX, resp: ProtoResponse) {
             buf[2] = (crc >> 8) as u8;
             buf[3] = (crc & 0xff) as u8;
             for &b in buf.iter() {
-                tx.write(b).ok();
-                // TODO hack
-                delay(48_000_000 / 10000);
+                block!(tx.write(b)).ok();
             }
         }
         ProtoResponse::InvalidError => {
@@ -188,9 +184,7 @@ fn send_cmd_response<TX: Write<u8>>(tx: &mut TX, resp: ProtoResponse) {
             buf[2] = (crc >> 8) as u8;
             buf[3] = (crc & 0xff) as u8;
             for &b in buf.iter() {
-                tx.write(b).ok();
-                // TODO hack
-                delay(48_000_000 / 10000);
+                block!(tx.write(b)).ok();
             }
         }
         ProtoResponse::CrcError => (),
